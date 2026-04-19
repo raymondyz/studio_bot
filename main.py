@@ -31,11 +31,6 @@ async def ping(interaction: discord.Interaction):
   await interaction.response.send_message("Pong!")
   print(f"Pinged at {time.ctime()}")
 
-@bot.tree.command(name="say")
-@app_commands.describe(message = "What should the bot say?")
-async def say(interaction: discord.Interaction, message: str):
-  await interaction.channel.send(f"{interaction.user.name} said `{message}`")
-
 @bot.tree.command(name="leaderboard", description='View the top 10 runs for the game "Getting Over It"!')
 async def leaderboard(
   interaction: discord.Interaction
@@ -103,7 +98,8 @@ async def submit_run(
   time_secs = parse_time(completion_time)
   if time_secs == None:
     await interaction.response.send_message(
-      'Please submit your time in hh:mm:ss format (ex "00:42:03" for 42min 3sec).'
+      'Please submit your time in hh:mm:ss format (ex "00:42:03" for 42min 3sec).',
+      ephemeral=True
     )
     return
   
