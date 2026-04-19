@@ -29,6 +29,7 @@ async def setup_hook():
 @bot.tree.command(name="ping")
 async def ping(interaction: discord.Interaction):
   await interaction.response.send_message("Pong!")
+  print(f"Pinged at {time.ctime()}")
 
 @bot.tree.command(name="say")
 @app_commands.describe(message = "What should the bot say?")
@@ -42,7 +43,7 @@ async def leaderboard(
   runs = load_and_sort_runs()
 
   # Check if there are runs
-  if len(runs) == 0:
+  if runs == None or len(runs) == 0:
     await interaction.response.send_message(
       "There are no runs submitted yet, maybe you can be the first!"
     )
@@ -62,11 +63,11 @@ async def leaderboard(
   )
 
 @bot.tree.command(name="submit-run", description='Submit a run for the game "Getting Over It"!')
-@app_commands.describe(time = 'Your completion time in hh:mm:ss (ex "00:42:03" for 42min 3sec)')
+@app_commands.describe(completion_time = 'Your completion time in hh:mm:ss (ex "00:42:03" for 42min 3sec)')
 @app_commands.describe(proof = "A screenshot of you making it to the end as proof!")
 async def submit_run(
   interaction: discord.Interaction,
-  time: str,
+  completion_time: str,
   proof: discord.Attachment
 ):
   
@@ -99,7 +100,7 @@ async def submit_run(
     return
   
   # Check if time is valid
-  time_secs = parse_time(time)
+  time_secs = parse_time(completion_time)
   if time_secs == None:
     await interaction.response.send_message(
       'Please submit your time in hh:mm:ss format (ex "00:42:03" for 42min 3sec).'
@@ -110,6 +111,7 @@ async def submit_run(
 
   # Record run to file
   record_run(interaction.user.id, time_secs)
+  print(f"A new run was submitted at {time.ctime()}")
   
   # Send message
   embed_message = f"{interaction.user.display_name} completed the game in {format_time(time_secs)}!"
@@ -120,11 +122,9 @@ async def submit_run(
   embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
   embed.set_image(url=proof.url)
 
-  # discord_file = await image.to_file()
   await interaction.response.send_message(
     content = "A new run has been submitted!",
     embed=embed,
-    # file = discord_file,
   )
 
 
@@ -195,12 +195,15 @@ def record_run(user_id: int, time_seconds: int):
     json.dump(runs, f, indent=2)
 
 def load_and_sort_runs():
-  with open(SPEEDRUNS_FILE, "r") as f:
-    runs = json.load(f)
+  try:
+    with open(SPEEDRUNS_FILE, "r") as f:
+      runs = json.load(f)
 
-  # sort by time ascending (fastest first)
-  runs.sort(key=lambda r: r["time"])
-
-  return runs
+    # sort by time ascending (fastest first)
+    runs.sort(key=lambda r: r["time"])
+    return runs
+  
+  except:
+    return None
 
 bot.run(TOKEN)
