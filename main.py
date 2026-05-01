@@ -1,9 +1,9 @@
 import discord, json, os, time
 from dotenv import load_dotenv
+from config import *
 from discord import app_commands
 from discord.ext import commands
-
-from config import *
+from utils.llm_utils import query_llm
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -201,5 +201,40 @@ def load_and_sort_runs():
   
   except:
     return None
+
+
+@bot.event
+async def on_message(message):
+  try:
+    # Ignore messages from itself
+    if message.author == bot.user:
+      return
+        
+    # Only respond to messages in the target channel
+    if message.channel.id not in QUOTABLE_CHANNELS:
+      return
+    
+    # Only respond if the message contains a quote
+    if {'"', '“', '”', "'", "‘", "’"}.isdisjoint(message.content):
+      return
+  
+    print(f"A new quote was sent by {message.author}: {message.content}")
+
+    # Scoring by LLM
+    score_sum = 0
+    trials = 5
+    for _ in range(trials):
+      result = await query_llm(LLM_QUOTE_RATING_INSTRUCTIONS, message.content)
+      score_sum += float(result.splitlines()[-1])
+    avg_score = round(score_sum / trials, 1)
+
+    print(f"Scoring complete: {avg_score}")
+    
+    await message.reply(f"I rate this quote {avg_score} freaks out of 10 freakys 🤨")
+
+  finally:
+    # Important: process commands
+    await bot.process_commands(message)
+
 
 bot.run(TOKEN)
