@@ -230,7 +230,7 @@ async def on_message(message):
 
     print(f"Scoring complete: {avg_score}")
     
-    await message.reply(f"I rate this quote {avg_score} freaks out of 10 freakys 🤨")
+    await message.reply(f"I rate this quote **{avg_score}** freaks out of 10 freakys 🤨")
 
   finally:
     # Important: process commands
