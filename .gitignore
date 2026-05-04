@@ -3,5 +3,6 @@ __pycache__/
 .env
 
 # Project
+data/*
 speedrun_records.json
 test.py
