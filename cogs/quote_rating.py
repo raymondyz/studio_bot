@@ -17,6 +17,9 @@ Once you have figured out what the quote means, you will rate it a scale from 0.
 0.0 being the most tame, normal, boring quote ever, and a 10.0 quote being the most diabolical words ever uttered in the history of humanity.
 Anything past a 4.0 should turn heads if said in public, 8.5+ should turn everyone's heads in public.
 
+Quotes must be enclosed by quotation marks (any type), any quotes not enclosed by quotation marks is a false positive.
+If you believe the message you have been given is a false positive and not an actual quote, respond with -1 as your rating
+
 You will respond with a short description of what you think the quote means, a short justification for your rating, and your rating.
 Your rating must be by itself on the last line of your response. Your final line must contain your rating with no formatting and nothing else.
 Incorrect: "I rate this 4.8" or "**8.9**"
@@ -48,7 +51,13 @@ class QuoteRating(commands.Cog):
     trials = 5
     for _ in range(trials):
       result = await query_llm(LLM_QUOTE_RATING_INSTRUCTIONS, message.content)
-      score_sum += float(result.splitlines()[-1])
+      print("\n" + result + "\n")
+      score = float(result.splitlines()[-1])
+      if score < 0:
+        # LLM believes the quote is a false positive, ignore
+        print("Scoring error: false positive")
+        return
+      score_sum += score
     avg_score = round(score_sum / trials, 1)
 
     print(f"Scoring complete: {avg_score}")
