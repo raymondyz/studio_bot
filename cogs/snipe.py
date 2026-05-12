@@ -1,7 +1,32 @@
-import discord
+import discord, time
 from discord import app_commands
 from discord.ext import commands
 from config import *
+
+from utils.sheet_utils import get_spreadsheet, get_worksheet, add_row
+
+
+snipe_spread = get_spreadsheet(SNIPE_SPREAD_LINK)
+snipe_sheet = get_worksheet(snipe_spread, SNIPE_LOG_SHEET_NAME)
+
+async def record_snipe(
+  sniper_id: int,
+  sniper_name: str,
+  target_id: int,
+  target_name: str,
+  message_url: str = None
+) -> None:
+  await add_row(
+    snipe_sheet,
+    [
+      sniper_id,
+      sniper_name,
+      target_id,
+      target_name,
+      time.ctime(),
+      message_url
+    ]
+  )
 
 
 class Snipe(commands.Cog):
@@ -54,12 +79,10 @@ class Snipe(commands.Cog):
         ephemeral=True
       )
       return
-
     
-    # Record snipe
     
     # Send message
-    embed_message = f"{message}!"
+    embed_message = message
     embed = discord.Embed(
       title=embed_message,
       color=0xff0000,
@@ -71,6 +94,19 @@ class Snipe(commands.Cog):
       content = f"## 💥 BANG! {interaction.user.display_name} caught {target.mention} lacking in 4K!",
       embed=embed,
     )
+    bot_response = await interaction.original_response()
+  
+    # Record snipe
+    await record_snipe(
+      sniper_id=interaction.user.id,
+      sniper_name=interaction.user.display_name,
+      target_id=target.id,
+      target_name=target.display_name,
+      message_url=bot_response.jump_url,
+    )
+
+    # Log
+    print(f"{interaction.user.display_name} sniped {target.display_name} at {time.ctime()}")
 
 
 async def setup(bot: commands.Bot):
