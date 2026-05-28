@@ -3,8 +3,10 @@ load_dotenv()
 
 import discord
 from discord.ext import commands
+from discord import app_commands
 import asyncio
 import os
+import traceback
 from config import *
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -23,6 +25,16 @@ async def on_ready():
     print(f"Synced {len(synced)} command(s)")
   except Exception as e:
     print(f"Sync failed: {e}")
+
+# Bot wide slash command error handler
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+  traceback.print_exception(type(error), error, error.__traceback__)
+  msg = f"Something went wrong: {error}"
+  if interaction.response.is_done():
+    await interaction.followup.send(msg, ephemeral=True)
+  else:
+    await interaction.response.send_message(msg, ephemeral=True)
 
 async def load_cogs():
   for filename in os.listdir("./cogs"):
