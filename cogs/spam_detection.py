@@ -19,10 +19,6 @@ class SpamDetection(commands.Cog):
     for channel_id in SPAM_CHECK_CHANNELS:
       channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
       messages = await get_member_messages(channel, member, 5)
-
-      # Empty messages means no match
-      if len(messages) == 0:
-        return False
       
       for msg in messages:
         # Has to have same content and be sent within 2 minutes to count as a match
@@ -75,6 +71,7 @@ class SpamDetection(commands.Cog):
     if message.channel.id not in SPAM_CHECK_CHANNELS:
       return
     
+    print("A")
     if await self._is_message_spam(message.author, message):
       user = self.bot.get_user(message.author.id) or await self.bot.fetch_user(message.author.id)
       log_message = await self._log_spam(user, message)
