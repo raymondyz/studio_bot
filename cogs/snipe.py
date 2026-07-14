@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from config import *
 
-from utils.sheet_utils import get_spreadsheet, get_worksheet, add_row
+from utils.sheet import get_spreadsheet, get_worksheet, add_row
 
 
 snipe_spread = get_spreadsheet(SNIPE_SPREAD_LINK)

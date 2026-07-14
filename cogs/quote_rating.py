@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from config import *
-from utils.llm_utils import query_llm
+from utils.llm import query_llm
 
 
 LLM_QUOTE_RATING_INSTRUCTIONS = """
