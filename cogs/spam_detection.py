@@ -30,6 +30,8 @@ class SpamDetection(commands.Cog):
     return spam_count >= SPAM_THRESHOLD
   
   async def _log_spam(self, user, message):
+    print(f"Spam detected: {user.name} detected for the following spam: {message.content}")
+
     log_channel = self.bot.get_channel(LOGGING_CHANNEL) or await self.bot.fetch_channel(LOGGING_CHANNEL)
 
     return await log_channel.send(f"# **Spam Detected!**\n{user.mention} ({user.name}) has been detected for the following spam:\n```{message.content}```")
@@ -45,20 +47,21 @@ class SpamDetection(commands.Cog):
     )
 
   async def _purge_spam_messages(self, user, message):
-    for channel in message.guild.text_channels + message.guild.voice_channels:
-      async for msg in channel.history(limit=5):
-        if msg.author != user:
-          continue
-        if msg.content != message.content:
-          continue
-        if abs(msg.created_at - message.created_at) >= timedelta(minutes=5):
-          continue
+    def is_spam(msg):
+      return (
+        msg.author == user
+        and msg.content == message.content
+        and abs(msg.created_at - message.created_at) < timedelta(minutes=5)
+      )
 
-        # Message is spam, delete
-        try:
-          await msg.delete()
-        except discord.NotFound:
-          pass
+    for channel in message.guild.text_channels + message.guild.voice_channels:
+      perms = channel.permissions_for(channel.guild.me)
+      if not (perms.read_message_history and perms.manage_messages):
+        continue
+      try:
+        await channel.purge(limit=5, check=is_spam)
+      except (discord.Forbidden, discord.HTTPException):
+        continue
     
 
   @commands.Cog.listener()
@@ -71,7 +74,6 @@ class SpamDetection(commands.Cog):
     if message.channel.id not in SPAM_CHECK_CHANNELS:
       return
     
-    print("A")
     if await self._is_message_spam(message.author, message):
       user = self.bot.get_user(message.author.id) or await self.bot.fetch_user(message.author.id)
       log_message = await self._log_spam(user, message)
@@ -85,6 +87,7 @@ class SpamDetection(commands.Cog):
         raise
       else:
         await log_message.reply("Successfully banned spammer and purged messages!")
+        print("Successfully banned and purged!")
 
 
 async def setup(bot: commands.Bot):
