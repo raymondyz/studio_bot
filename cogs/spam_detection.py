@@ -11,11 +11,17 @@ class SpamDetection(commands.Cog):
     self.bot = bot
 
   async def _is_message_spam(self, member, message) -> bool:
+    """Checks if a message fits the criteria for being a spam message
+
+    Criteria: the number of identical messages sent to different channels by the same user reaches the set threshold within 2 mins
+    """
+
     # Short messages don't count
     if len(message.content) < 20:
       return False
 
     spam_count = 0
+    # Find identical messages in other channels
     for channel_id in SPAM_CHECK_CHANNELS:
       channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
       messages = await get_member_messages(channel, member, 5)
@@ -30,6 +36,8 @@ class SpamDetection(commands.Cog):
     return spam_count >= SPAM_THRESHOLD
   
   async def _log_spam(self, user, message):
+    """Log the detected spam in the logging channel"""
+
     print(f"Spam detected: {user.name} detected for the following spam: {message.content}")
 
     log_channel = self.bot.get_channel(LOGGING_CHANNEL) or await self.bot.fetch_channel(LOGGING_CHANNEL)
@@ -37,6 +45,8 @@ class SpamDetection(commands.Cog):
     return await log_channel.send(f"# **Spam Detected!**\n{user.mention} ({user.name}) has been detected for the following spam:\n```{message.content}```")
   
   async def _notify_spammer(self, user, message):
+    """Direct message the spammer about the ban"""
+
     return await user.send(
       "# **You have been __banned__**!\n" \
       "You have been banned from the ACM Studio Discord for spamming. " \
@@ -47,6 +57,8 @@ class SpamDetection(commands.Cog):
     )
 
   async def _purge_spam_messages(self, user, message):
+    """Remove the spam message across all server channels"""
+
     def is_spam(msg):
       return (
         msg.author == user
@@ -59,6 +71,7 @@ class SpamDetection(commands.Cog):
       if not (perms.read_message_history and perms.manage_messages):
         continue
       try:
+        # Remove all messages that match the is_spam criteria
         await channel.purge(limit=5, check=is_spam)
       except (discord.Forbidden, discord.HTTPException):
         continue
@@ -76,9 +89,11 @@ class SpamDetection(commands.Cog):
     
     if await self._is_message_spam(message.author, message):
       user = self.bot.get_user(message.author.id) or await self.bot.fetch_user(message.author.id)
+      # Log the detection and notify the spammer about their ban
       log_message = await self._log_spam(user, message)
-      notify_message = await self._notify_spammer(user, message)
+      notify_message = await self._notify_spammer(user, message) # This must be done before the ban, so DMs go though
       try:
+        # Attempt to ban spammer and purge messages
         await message.author.ban(reason="Studio Bot auto-ban: spamming")
         await self._purge_spam_messages(user, message)
       except Exception as e:
