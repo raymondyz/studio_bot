@@ -8,25 +8,46 @@ import asyncio
 import os
 import traceback
 import sys
+import aiosqlite
 
 from config import *
+from utils.snipe import SnipesDatabase
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
+class StudioBot(commands.Bot):   
+  def __init__(self):
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.members = True
+    super().__init__(command_prefix="!", intents=intents)
+    self.snipes_db: SnipesDatabase | None = None
+ 
+  async def setup_hook(self):
+    # Creates the data folder, connects, sets pragmas, and runs schema.sql
+    self.snipes_db = await SnipesDatabase.connect(SNIPE_DB_PATH, SNIPE_SCHEMA_PATH)
+ 
+    # Load cogs, then register slash commands with Discord
+    # await self.load_extension("cogs.snipes")
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+    # Sync slash commands
+    try:
+      synced = await self.tree.sync()
+      print(f"Synced {len(synced)} command(s)")
+    except Exception as e:
+      print(f"Sync failed: {e}")
+ 
+  async def close(self):
+    await super().close()
+    if self.snipes_db is not None:
+      await self.snipes_db.close()
+
+
+bot = StudioBot()
 
 @bot.event
 async def on_ready():
   print(f"Logged in as {bot.user}")
-  try:
-    synced = await bot.tree.sync()
-    print(f"Synced {len(synced)} command(s)")
-  except Exception as e:
-    print(f"Sync failed: {e}")
 
 # Bot wide slash command error handler
 @bot.tree.error

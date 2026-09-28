@@ -21,6 +21,9 @@ SPEEDRUNS_FILE = DATA_DIR / "speedruns.json"
 
 # ========== SNIPES ==========
 
+SNIPE_DB_PATH = DATA_DIR / "snipes.db"
+SNIPE_SCHEMA_PATH = BASE_DIR / "schema.sql"
+
 # List of channels allowed for the snipe command (channel ID)
 SNIPEABLE_CHANNELS = [TESTING_CHANNEL]
 
