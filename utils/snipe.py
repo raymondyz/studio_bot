@@ -1,14 +1,15 @@
-"""Database access layer for the snipe bot.
+"""Database access layer and scoring for the snipe bot.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import aiosqlite
 
@@ -286,3 +287,137 @@ class SnipesDatabase:
     async with self._conn.execute("SELECT MAX(message_id) FROM snipes") as cursor:
       row = await cursor.fetchone()
     return row[0]
+
+
+# ---------- scoring ----------
+# Scores are calculated from the snipe log rather than stored, so changing
+# these constants rescores all past snipes too
+
+# Snipe statuses that count towards scores
+SCORED_STATUSES = ("pending", "confirmed")
+
+# Bounty of a player who was just sniped
+BASE_BOUNTY = 3
+
+# Added to a player's bounty for every full week since they were last sniped
+BOUNTY_PER_WEEK = 1
+
+# Bounty of a player who has never been sniped
+NEVER_SNIPED_BOUNTY = 6
+
+# Extra points for each person sniped in a snipe
+SNIPE_BONUS = 0
+
+# Multiplies the points for each person sniped
+GAME_MULTIPLIER = 1
+
+# Points a player loses each time they're sniped
+SNIPED_PENALTY = 2
+
+
+def calculate_bounty(last_sniped_at: datetime | None, at: datetime) -> int:
+  """A player's bounty at a given time. last_sniped_at is None if they've never been sniped."""
+  if last_sniped_at is None:
+    return NEVER_SNIPED_BOUNTY
+  weeks = (at - last_sniped_at) // timedelta(weeks=1)
+  return BASE_BOUNTY + BOUNTY_PER_WEEK * weeks
+
+
+def calculate_player_bounty(snipes: Iterable[Snipe], player_id: int, at: datetime) -> int:
+  """A player's bounty at a given time (usually now). Snipes after that time are ignored."""
+  last_sniped_at = max(
+    (
+      snipe.sniped_at for snipe in snipes
+      if snipe.status in SCORED_STATUSES
+      and player_id in snipe.target_ids
+      and snipe.sniped_at <= at
+    ),
+    default=None,
+  )
+  return calculate_bounty(last_sniped_at, at)
+
+
+def _replay(snipes: Iterable[Snipe]) -> Iterator[tuple[Snipe, int, int]]:
+  """Replays the snipe history in order, yielding (snipe, target_id, points)
+  for each person sniped in each scored snipe.
+
+  points is what sniping that person was worth to the sniper, from their bounty
+  at the time.
+  """
+  last_sniped_at: dict[int, datetime] = {}
+
+  for snipe in sorted(snipes, key=lambda snipe: (snipe.sniped_at, snipe.id)):
+    if snipe.status not in SCORED_STATUSES:
+      continue
+    for target_id in snipe.target_ids:
+      bounty = calculate_bounty(last_sniped_at.get(target_id), snipe.sniped_at)
+      yield snipe, target_id, (bounty + SNIPE_BONUS) * GAME_MULTIPLIER
+      last_sniped_at[target_id] = snipe.sniped_at
+
+
+def calculate_scores(snipes: Iterable[Snipe]) -> dict[int, int]:
+  """Replays the snipe history in order and returns {player_id: score}.
+
+  Players who haven't been in a scored snipe are left out, so look scores up
+  with .get(player_id, 0).
+  """
+  scores: dict[int, int] = defaultdict(int)
+  for snipe, target_id, points in _replay(snipes):
+    scores[snipe.sniper_id] += points
+    scores[target_id] -= SNIPED_PENALTY
+  return dict(scores)
+
+
+def calculate_snipe_points(snipes: Iterable[Snipe], snipe_id: int) -> dict[int, int]:
+  """What each person sniped in one snipe was worth to the sniper, as {target_id: points}.
+
+  Empty if that snipe isn't in the history or doesn't count towards scores.
+  """
+  return {
+    target_id: points
+    for snipe, target_id, points in _replay(snipes)
+    if snipe.id == snipe_id
+  }
+
+
+@dataclass(frozen=True)
+class PlayerStats:
+  points: int
+  snipes: int  # snipes they made; a group snipe counts once
+  times_sniped: int
+  bounty: int
+
+
+def calculate_player_stats(snipes: Iterable[Snipe], player_id: int, at: datetime) -> PlayerStats:
+  """A player's stats at a given time (usually now). Snipes after that time are ignored."""
+  scored = [
+    snipe for snipe in snipes
+    if snipe.status in SCORED_STATUSES and snipe.sniped_at <= at
+  ]
+  return PlayerStats(
+    points=calculate_scores(scored).get(player_id, 0),
+    snipes=sum(1 for snipe in scored if snipe.sniper_id == player_id),
+    times_sniped=sum(1 for snipe in scored if player_id in snipe.target_ids),
+    bounty=calculate_player_bounty(scored, player_id, at),
+  )
+
+
+@dataclass(frozen=True)
+class LeaderboardEntry:
+  rank: int
+  player: Player
+  points: int
+
+
+def calculate_leaderboard(snipes: Iterable[Snipe], players: Iterable[Player]) -> list[LeaderboardEntry]:
+  """Ranks players by points, highest first. Tied players share a rank (1, 2, 2, 4)."""
+  scores = calculate_scores(snipes)
+  ranked = sorted(players, key=lambda player: (-scores.get(player.id, 0), player.name.lower()))
+
+  leaderboard: list[LeaderboardEntry] = []
+  for position, player in enumerate(ranked, start=1):
+    points = scores.get(player.id, 0)
+    tied = len(leaderboard) > 0 and leaderboard[-1].points == points
+    rank = leaderboard[-1].rank if tied else position
+    leaderboard.append(LeaderboardEntry(rank, player, points))
+  return leaderboard

@@ -1,4 +1,5 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -7,6 +8,9 @@ DATA_DIR.mkdir(exist_ok=True)
 # JSON file that contains google credentials (for spreads)
 GOOGLE_CRED_FILE = BASE_DIR / "credentials.json"
 
+
+# Users allowed to run configuration commands on the bot
+ADMIN_USERS = [719991200106676246]
 
 # Channel that every feature is allowed in, for testing
 TESTING_CHANNEL = 923084109578899456
@@ -23,6 +27,13 @@ SPEEDRUNS_FILE = DATA_DIR / "speedruns.json"
 
 SNIPE_DB_PATH = DATA_DIR / "snipes.db"
 SNIPE_SCHEMA_PATH = BASE_DIR / "schema.sql"
+
+# Timezone that admins enter custom snipe dates in
+SNIPE_TIMEZONE = ZoneInfo("America/Los_Angeles")
+
+# How long a snipe can still be changed after it's made (hours), by the "Not a snipe"
+# button or by editing or deleting the message. After that it's locked
+SNIPE_CHANGE_WINDOW_HOURS = 2
 
 # List of channels allowed for the snipe command (channel ID)
 SNIPEABLE_CHANNELS = [TESTING_CHANNEL]
