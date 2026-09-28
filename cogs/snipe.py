@@ -116,10 +116,9 @@ class Snipe(commands.Cog):
     return None
 
   @staticmethod
-  def _display_name(guild: discord.Guild, player: Player) -> str:
-    """A player's Discord name, or their stored name if they left the server, safe to put in markdown."""
-    member = guild.get_member(player.discord_id)
-    return discord.utils.escape_markdown(member.display_name if member else player.name)
+  def _display_name(player: Player) -> str:
+    """The real name a player was added with, safe to put in markdown."""
+    return discord.utils.escape_markdown(player.name)
 
   @staticmethod
   async def _check_admin(interaction: discord.Interaction) -> bool:
@@ -152,7 +151,7 @@ class Snipe(commands.Cog):
 
   @player.command(name="add", description="Add someone to the snipe game")
   @app_commands.describe(member="Who to add")
-  @app_commands.describe(name="Their real name")
+  @app_commands.describe(name="Their real name, shown on the leaderboards and stats")
   async def player_add(self, interaction: discord.Interaction, member: discord.Member, name: str):
     if not await Snipe._check_admin(interaction):
       return
@@ -307,7 +306,7 @@ class Snipe(commands.Cog):
     stats = calculate_player_stats(await db.list_snipes(), db_player.id, datetime.now(timezone.utc))
 
     embed = discord.Embed(
-      title=f"{player.display_name}'s snipe stats",
+      title=f"{db_player.name}'s snipe stats",
       color=0xff0000,
     )
     if not db_player.active:
@@ -337,7 +336,7 @@ class Snipe(commands.Cog):
       return
 
     lines = [
-      f"**{entry.rank}.** {Snipe._display_name(interaction.guild, entry.player)}: {entry.points} pts"
+      f"**{entry.rank}.** {Snipe._display_name(entry.player)}: {entry.points} pts"
       for entry in leaderboard
     ]
     embed = discord.Embed(
@@ -362,7 +361,7 @@ class Snipe(commands.Cog):
       return
 
     lines = [
-      f"{Snipe._display_name(interaction.guild, player)}: {bounty} pts"
+      f"{Snipe._display_name(player)}: {bounty} pts"
       for player, bounty in bounties
     ]
     embed = discord.Embed(
