@@ -13,6 +13,8 @@ from typing import Iterable, Iterator
 
 import aiosqlite
 
+from config import SNIPE_TIMEZONE
+
 SNIPE_STATUSES = ("pending", "confirmed", "voided")
 
 
@@ -302,8 +304,11 @@ BASE_BOUNTY = 3
 # Added to a player's bounty for every full week since they were last sniped
 BOUNTY_PER_WEEK = 1
 
-# Bounty of a player who has never been sniped
-NEVER_SNIPED_BOUNTY = 6
+# Players who have never been sniped count as last sniped at the start of the game...
+GAME_START = datetime(2026, 9, 28, tzinfo=SNIPE_TIMEZONE)
+
+# ...and their bounty is multiplied by this
+NEVER_SNIPED_MULTIPLIER = 2
 
 # Extra points for each person sniped in a snipe
 SNIPE_BONUS = 0
@@ -318,8 +323,9 @@ SNIPED_PENALTY = 2
 def calculate_bounty(last_sniped_at: datetime | None, at: datetime) -> int:
   """A player's bounty at a given time. last_sniped_at is None if they've never been sniped."""
   if last_sniped_at is None:
-    return NEVER_SNIPED_BOUNTY
-  weeks = (at - last_sniped_at) // timedelta(weeks=1)
+    return NEVER_SNIPED_MULTIPLIER * calculate_bounty(GAME_START, at)
+  # Never negative, e.g. for snipes recorded with a date before the game started
+  weeks = max(0, (at - last_sniped_at) // timedelta(weeks=1))
   return BASE_BOUNTY + BOUNTY_PER_WEEK * weeks
 
 
