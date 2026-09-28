@@ -10,6 +10,7 @@ from config import *
 from utils.snipe import (
   Player,
   Snipe as SnipeRecord,
+  calculate_bounties,
   calculate_leaderboard,
   calculate_player_stats,
   calculate_snipe_points,
@@ -113,6 +114,12 @@ class Snipe(commands.Cog):
       except ValueError:
         pass
     return None
+
+  @staticmethod
+  def _display_name(guild: discord.Guild, player: Player) -> str:
+    """A player's Discord name, or their stored name if they left the server, safe to put in markdown."""
+    member = guild.get_member(player.discord_id)
+    return discord.utils.escape_markdown(member.display_name if member else player.name)
 
   @staticmethod
   async def _check_admin(interaction: discord.Interaction) -> bool:
@@ -329,15 +336,37 @@ class Snipe(commands.Cog):
       await interaction.response.send_message("There are no players yet!")
       return
 
-    # Show Discord names, falling back to the stored name for players who left the server
-    lines = []
-    for entry in leaderboard:
-      member = interaction.guild.get_member(entry.player.discord_id)
-      name = discord.utils.escape_markdown(member.display_name if member else entry.player.name)
-      lines.append(f"**{entry.rank}.** {name}: {entry.points} pts")
-
+    lines = [
+      f"**{entry.rank}.** {Snipe._display_name(interaction.guild, entry.player)}: {entry.points} pts"
+      for entry in leaderboard
+    ]
     embed = discord.Embed(
       title="Snipe Leaderboard",
+      description="\n".join(lines),
+      color=0xff0000,
+    )
+    await interaction.response.send_message(embed=embed)
+
+  @app_commands.command(name="snipe-bounties", description="See every player's bounty, highest first")
+  @app_commands.guild_only()
+  async def snipe_bounties(self, interaction: discord.Interaction):
+    if not await Snipe._check_snipe_channel(interaction):
+      return
+
+    db = self.bot.snipes_db
+    bounties = calculate_bounties(await db.list_snipes(), await db.list_players(), datetime.now(timezone.utc))
+
+    # Check if there are players
+    if len(bounties) == 0:
+      await interaction.response.send_message("There are no players yet!")
+      return
+
+    lines = [
+      f"{Snipe._display_name(interaction.guild, player)}: {bounty} pts"
+      for player, bounty in bounties
+    ]
+    embed = discord.Embed(
+      title="Snipe Bounties",
       description="\n".join(lines),
       color=0xff0000,
     )

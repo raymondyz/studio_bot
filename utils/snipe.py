@@ -421,3 +421,13 @@ def calculate_leaderboard(snipes: Iterable[Snipe], players: Iterable[Player]) ->
     rank = leaderboard[-1].rank if tied else position
     leaderboard.append(LeaderboardEntry(rank, player, points))
   return leaderboard
+
+
+def calculate_bounties(snipes: Iterable[Snipe], players: Iterable[Player], at: datetime) -> list[tuple[Player, int]]:
+  """Every player's bounty at a given time (usually now), as (player, bounty), highest first.
+
+  Tied players are sorted by name.
+  """
+  snipes = list(snipes)  # read once per player
+  bounties = [(player, calculate_player_bounty(snipes, player.id, at)) for player in players]
+  return sorted(bounties, key=lambda entry: (-entry[1], entry[0].name.lower()))
