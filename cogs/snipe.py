@@ -319,7 +319,7 @@ class Snipe(commands.Cog):
     embed.add_field(name="Times sniped", value=stats.times_sniped)
     embed.add_field(name="​", value="​")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
   @app_commands.command(name="snipe-leaderboard", description="See every player ranked by points")
   @app_commands.guild_only()
@@ -332,7 +332,7 @@ class Snipe(commands.Cog):
 
     # Check if there are players
     if len(leaderboard) == 0:
-      await interaction.response.send_message("There are no players yet!")
+      await interaction.response.send_message("There are no players yet!", ephemeral=True)
       return
 
     lines = [
@@ -344,7 +344,7 @@ class Snipe(commands.Cog):
       description="\n".join(lines),
       color=0xff0000,
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
   @app_commands.command(name="snipe-bounties", description="See every player's bounty, highest first")
   @app_commands.guild_only()
@@ -357,7 +357,7 @@ class Snipe(commands.Cog):
 
     # Check if there are players
     if len(bounties) == 0:
-      await interaction.response.send_message("There are no players yet!")
+      await interaction.response.send_message("There are no players yet!", ephemeral=True)
       return
 
     lines = [
@@ -369,7 +369,7 @@ class Snipe(commands.Cog):
       description="\n".join(lines),
       color=0xff0000,
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
   # ---------- snipe messages ----------
   # Raw events are used for edits and deletes because the normal ones skip messages
