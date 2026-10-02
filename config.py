@@ -15,6 +15,9 @@ ADMIN_USERS = [719991200106676246]
 # Channel that every feature is allowed in, for testing
 TESTING_CHANNEL = 923084109578899456
 
+# Cogs in ./cogs that should not be loaded (filename without .py)
+DISABLED_COGS = ["loa_leaderboard"]
+
 # ========== SPEEDRUN ==========
 
 # List of channels allowed for speedrun submits

@@ -77,7 +77,11 @@ async def on_error(event_method, *args, **kwargs):
 async def load_cogs():
   for filename in os.listdir("./cogs"):
     if filename.endswith(".py"):
-      await bot.load_extension(f"cogs.{filename[:-3]}")
+      name = filename[:-3]
+      if name in DISABLED_COGS:
+        print(f"Skipped {filename} (disabled)")
+        continue
+      await bot.load_extension(f"cogs.{name}")
       print(f"Loaded {filename}")
 
 async def main():
