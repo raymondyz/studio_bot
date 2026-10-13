@@ -25,6 +25,12 @@ DATE_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d")
 # How many messages after a snipe to search for the bot's reply to it
 REPLY_SEARCH_LIMIT = 50
 
+# Shown on snipes voided with the "Void snipe" menu
+ADMIN_VOID_REASON = "Removed by an admin"
+
+# Matches what _voided_content makes, so it can be undone
+VOIDED_CONTENT_PATTERN = re.compile(r"~~(?P<content>.*)~~\n\*\*.*\*\* \(voided\)", re.DOTALL)
+
 
 def _within_change_window(sent_at: datetime) -> bool:
   return datetime.now(timezone.utc) - sent_at <= timedelta(hours=SNIPE_CHANGE_WINDOW_HOURS)
@@ -38,6 +44,12 @@ def _is_changeable(snipe: SnipeRecord | None) -> bool:
 def _voided_content(content: str, reason: str) -> str:
   """A snipe reply, crossed out with why it was voided."""
   return f"~~{content}~~\n**{reason}** (voided)"
+
+
+def _restored_content(content: str) -> str:
+  """A voided snipe reply, no longer crossed out."""
+  match = VOIDED_CONTENT_PATTERN.fullmatch(content)
+  return match["content"] if match else content
 
 
 class NotASnipeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"snipe:void:(?P<snipe_id>\d+)"):
@@ -88,11 +100,71 @@ class NotASnipeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"snip
     print(f"{interaction.user} voided snipe {snipe.id}")
 
 
+class RestoreSnipeButton(discord.ui.DynamicItem[discord.ui.Button], template=r"snipe:restore:(?P<snipe_id>\d+):(?P<message_id>\d+)"):
+  """Lets an admin undo voiding a snipe.
+
+  Stores the snipe ID and the bot's message showing the snipe (0 if there isn't one),
+  so buttons keep working after the bot restarts.
+  """
+
+  def __init__(self, snipe_id: int, message_id: int):
+    super().__init__(
+      discord.ui.Button(
+        label="Restore",
+        style=discord.ButtonStyle.secondary,
+        custom_id=f"snipe:restore:{snipe_id}:{message_id}",
+      )
+    )
+    self.snipe_id = snipe_id
+    self.message_id = message_id
+
+  @classmethod
+  async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str]):
+    return cls(int(match["snipe_id"]), int(match["message_id"]))
+
+  async def callback(self, interaction: discord.Interaction):
+    if interaction.user.id not in ADMIN_USERS:
+      await interaction.response.send_message(
+        "Only bot admins can restore snipes.",
+        ephemeral=True
+      )
+      return
+
+    # Check if it's still voided, in case it was restored from another message
+    db = interaction.client.snipes_db
+    snipe = await db.get_snipe(self.snipe_id)
+    if snipe is None or snipe.status != "voided":
+      await interaction.response.edit_message(content="This snipe isn't voided.", view=None)
+      return
+
+    # Confirmed snipes can't be voided by the sniper, so an admin's decision sticks
+    await db.set_snipe_status(snipe.id, "confirmed")
+    await interaction.response.edit_message(content="Restored this snipe.", view=None)
+    print(f"{interaction.user} restored snipe {snipe.id}")
+
+    if self.message_id == 0:
+      return
+    try:
+      message = await interaction.channel.fetch_message(self.message_id)
+      await message.edit(
+        content=_restored_content(message.content),
+        allowed_mentions=discord.AllowedMentions.none()
+      )
+    except discord.HTTPException:
+      pass  # the message was deleted
+
+
 class Snipe(commands.Cog):
   def __init__(self, bot: commands.Bot):
     self.bot = bot
     # Timers that remove "Not a snipe" buttons, kept so they aren't garbage collected
     self._button_timers: set[asyncio.Task] = set()
+    # Context menus can't be made with decorators in cogs, so this is added to the tree by hand
+    self._void_menu = app_commands.ContextMenu(name="Void snipe", callback=self.void_snipe_menu)
+    self.bot.tree.add_command(self._void_menu)
+
+  async def cog_unload(self):
+    self.bot.tree.remove_command(self._void_menu.name, type=self._void_menu.type)
 
   # ---------- helpers ----------
 
@@ -279,6 +351,31 @@ class Snipe(commands.Cog):
     )
     print(f"{interaction.user} recorded a snipe by {sniper}")
 
+  # Added to the tree in __init__, as a message's Apps > "Void snipe"
+  @app_commands.guild_only()
+  async def void_snipe_menu(self, interaction: discord.Interaction, message: discord.Message):
+    """Voids any snipe, however old, from its message or the bot's message about it."""
+    if not await Snipe._check_admin(interaction):
+      return
+
+    # Finding and crossing out the bot's message about the snipe can take a while
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    snipe, shown_in = await self._snipe_from_message(message)
+    if snipe is None:
+      await interaction.followup.send("That message isn't a snipe.", ephemeral=True)
+      return
+
+    view = discord.ui.View(timeout=None)
+    view.add_item(RestoreSnipeButton(snipe.id, shown_in.id if shown_in is not None else 0))
+
+    if snipe.status == "voided":
+      await interaction.followup.send("This snipe is already voided.", view=view, ephemeral=True)
+      return
+
+    await self._void_snipe(snipe, shown_in, ADMIN_VOID_REASON)
+    await interaction.followup.send("Voided this snipe.", view=view, ephemeral=True)
+
   # ---------- player commands ----------
   # Snipe commands are named snipe-<name>
 
@@ -408,7 +505,7 @@ class Snipe(commands.Cog):
 
     # A snipe edited to remove every ping is voided
     if found is None:
-      await self._void_snipe(snipe, message.channel, "Pings removed")
+      await self._void_snipe(snipe, await self._find_reply(message.channel, message.id), "Pings removed")
       return
 
     # Otherwise update who was sniped. Edits that don't change the pings, like Discord
@@ -517,13 +614,31 @@ class Snipe(commands.Cog):
         return message
     return None
 
-  async def _void_snipe(self, snipe: SnipeRecord, channel: discord.abc.Messageable, reason: str):
-    """Voids a snipe and crosses out the bot's reply to it."""
+  async def _snipe_from_message(self, message: discord.Message) -> tuple[SnipeRecord | None, discord.Message | None]:
+    """The snipe a message is about, and the bot's message showing it (None if it can't be found).
+
+    Works on a snipe message, the bot's reply to one, or the bot's record of an admin snipe.
+    """
+    db = self.bot.snipes_db
+    snipe = await db.get_snipe_by_message_id(message.id)
+
+    # The bot's replies point to their snipe message. Admin snipes are recorded from
+    # the bot's own message, so they show themselves
+    if message.author.id == self.bot.user.id:
+      if snipe is None and message.reference is not None:
+        snipe = await db.get_snipe_by_message_id(message.reference.message_id)
+      return snipe, message
+
+    if snipe is None:
+      return None, None
+    return snipe, await self._find_reply(message.channel, message.id)
+
+  async def _void_snipe(self, snipe: SnipeRecord, shown_in: discord.Message | None, reason: str):
+    """Voids a snipe and crosses out the bot's message showing it, usually its reply."""
     await self.bot.snipes_db.set_snipe_status(snipe.id, "voided")
-    reply = await self._find_reply(channel, snipe.message_id)
-    if reply is not None:
-      await reply.edit(
-        content=_voided_content(reply.content, reason),
+    if shown_in is not None:
+      await shown_in.edit(
+        content=_voided_content(shown_in.content, reason),
         view=None,
         allowed_mentions=discord.AllowedMentions.none()
       )
@@ -538,7 +653,7 @@ class Snipe(commands.Cog):
     for message_id in message_ids:
       snipe = await db.get_snipe_by_message_id(message_id)
       if _is_changeable(snipe):
-        await self._void_snipe(snipe, channel, "Message deleted")
+        await self._void_snipe(snipe, await self._find_reply(channel, message_id), "Message deleted")
 
   @staticmethod
   async def _remove_button_at(message: discord.Message, when: datetime):
@@ -550,6 +665,6 @@ class Snipe(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-  # Lets "Not a snipe" buttons sent before a restart keep working
-  bot.add_dynamic_items(NotASnipeButton)
+  # Lets "Not a snipe" and "Restore" buttons sent before a restart keep working
+  bot.add_dynamic_items(NotASnipeButton, RestoreSnipeButton)
   await bot.add_cog(Snipe(bot))
