@@ -224,7 +224,14 @@ class Snipe(commands.Cog):
   @player.command(name="add", description="Add someone to the snipe game")
   @app_commands.describe(member="Who to add")
   @app_commands.describe(name="Their real name, shown on the leaderboards and stats")
-  async def player_add(self, interaction: discord.Interaction, member: discord.Member, name: str):
+  @app_commands.describe(intern="Whether they're an intern, whose bounty starts later (blank keeps it as is)")
+  async def player_add(
+    self,
+    interaction: discord.Interaction,
+    member: discord.Member,
+    name: str,
+    intern: bool | None = None,
+  ):
     if not await Snipe._check_admin(interaction):
       return
 
@@ -232,12 +239,15 @@ class Snipe(commands.Cog):
     player = await db.get_player_by_discord_id(member.id)
 
     if player is None:
-      await db.add_player(member.id, name)
+      is_intern = bool(intern)
+      await db.add_player(member.id, name, is_intern)
       response = f"Added {member.mention} ({name}) to the snipe game!"
     elif not player.active:
       # Previously removed players are reactivated, keeping their history
+      is_intern = player.intern if intern is None else intern
       await db.set_player_active(player.id, True)
       await db.rename_player(player.id, name)
+      await db.set_player_intern(player.id, is_intern)
       response = f"Welcome back {member.mention} ({name}), your snipe history was kept!"
     else:
       await interaction.response.send_message(
@@ -247,6 +257,8 @@ class Snipe(commands.Cog):
       )
       return
 
+    if is_intern:
+      response += "\nThey're an intern, so their bounty starts later."
     if not Snipe._is_snipeable(member):
       response += "\nThey don't have a snipeable role yet, so they can't snipe or be sniped until they get one."
 
@@ -276,6 +288,31 @@ class Snipe(commands.Cog):
       allowed_mentions=discord.AllowedMentions.none()
     )
     print(f"{interaction.user} removed {user} as a player")
+
+  @player.command(name="intern", description="Set whether a player is an intern (their bounty starts later)")
+  @app_commands.describe(user="Whose intern status to set")
+  @app_commands.describe(intern="Whether they're an intern")
+  async def player_intern(self, interaction: discord.Interaction, user: discord.User, intern: bool):
+    if not await Snipe._check_admin(interaction):
+      return
+
+    # Removed players can be changed too, since their past snipes still count
+    db = self.bot.snipes_db
+    player = await db.get_player_by_discord_id(user.id)
+    if player is None:
+      await interaction.response.send_message(
+        f"{user.mention} isn't a player.",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none()
+      )
+      return
+
+    await db.set_player_intern(player.id, intern)
+    await interaction.response.send_message(
+      f"{user.mention} is {'now' if intern else 'no longer'} an intern.",
+      allowed_mentions=discord.AllowedMentions.none()
+    )
+    print(f"{interaction.user} set {user} as {'an intern' if intern else 'not an intern'}")
 
   @app_commands.command(name="admin-snipe", description="Record a snipe on someone's behalf (admin only)")
   @app_commands.describe(sniper="Who took the photo")
@@ -400,7 +437,12 @@ class Snipe(commands.Cog):
       )
       return
 
-    stats = calculate_player_stats(await db.list_snipes(), db_player.id, datetime.now(timezone.utc))
+    stats = calculate_player_stats(
+      await db.list_snipes(),
+      await db.list_intern_ids(),
+      db_player.id,
+      datetime.now(timezone.utc)
+    )
 
     embed = discord.Embed(
       title=f"{db_player.name}'s snipe stats",
@@ -425,7 +467,7 @@ class Snipe(commands.Cog):
       return
 
     db = self.bot.snipes_db
-    leaderboard = calculate_leaderboard(await db.list_snipes(), await db.list_players())
+    leaderboard = calculate_leaderboard(await db.list_snipes(), await db.list_intern_ids(), await db.list_players())
 
     # Check if there are players
     if len(leaderboard) == 0:
@@ -574,7 +616,8 @@ class Snipe(commands.Cog):
 
   async def _describe_snipe(self, snipe_id: int, sniper: Player, sniped: list[Player]) -> str:
     """The reply to a snipe: who sniped whom, and what it was worth."""
-    points = calculate_snipe_points(await self.bot.snipes_db.list_snipes(), snipe_id)
+    db = self.bot.snipes_db
+    points = calculate_snipe_points(await db.list_snipes(), await db.list_intern_ids(), snipe_id)
     if len(sniped) == 1:
       return f"💥 <@{sniper.discord_id}> sniped <@{sniped[0].discord_id}> for **{points.get(sniped[0].id, 0)}** points!"
     parts = [f"<@{player.discord_id}> (+{points.get(player.id, 0)})" for player in sniped]

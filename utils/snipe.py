@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Collection, Iterable, Iterator
 
 import aiosqlite
 
@@ -24,6 +24,7 @@ class Player:
   discord_id: int
   name: str
   active: bool
+  intern: bool
   joined_at: datetime
 
 
@@ -56,6 +57,7 @@ def _row_to_player(row: aiosqlite.Row) -> Player:
     discord_id=row["discord_id"],
     name=row["name"],
     active=bool(row["active"]),
+    intern=bool(row["intern"]),
     joined_at=_from_db_time(row["joined_at"]),
   )
 
@@ -113,8 +115,21 @@ class SnipesDatabase:
     await conn.execute("PRAGMA foreign_keys = ON")
     await conn.execute("PRAGMA journal_mode = WAL")
     await conn.executescript(schema_path.read_text())
+    await cls._migrate(conn)
     await conn.commit()
     return cls(conn)
+
+  @staticmethod
+  async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Brings databases made with an older schema.sql up to date.
+
+    schema.sql only creates missing tables, so columns added since are added here.
+    """
+    columns = {row["name"] for row in await conn.execute_fetchall("PRAGMA table_info(players)")}
+    if "intern" not in columns:
+      await conn.execute(
+        "ALTER TABLE players ADD COLUMN intern INTEGER NOT NULL DEFAULT 0 CHECK (intern IN (0, 1))"
+      )
 
   async def close(self) -> None:
     await self._conn.close()
@@ -131,13 +146,13 @@ class SnipesDatabase:
 
   # ---------- players ----------
 
-  async def add_player(self, discord_id: int, name: str) -> Player | None:
+  async def add_player(self, discord_id: int, name: str, intern: bool = False) -> Player | None:
     """Register a player. Returns None if this Discord user is already registered."""
     try:
       async with self._transaction() as conn:
         cursor = await conn.execute(
-          "INSERT INTO players (discord_id, name) VALUES (?, ?)",
-          (discord_id, name),
+          "INSERT INTO players (discord_id, name, intern) VALUES (?, ?, ?)",
+          (discord_id, name, int(intern)),
         )
         player_id = cursor.lastrowid
     except aiosqlite.IntegrityError:
@@ -188,6 +203,19 @@ class SnipesDatabase:
         "UPDATE players SET active = ? WHERE id = ?", (int(active), player_id)
       )
     return cursor.rowcount > 0
+
+  async def set_player_intern(self, player_id: int, intern: bool) -> bool:
+    """Returns False if no such player."""
+    async with self._transaction() as conn:
+      cursor = await conn.execute(
+        "UPDATE players SET intern = ? WHERE id = ?", (int(intern), player_id)
+      )
+    return cursor.rowcount > 0
+
+  async def list_intern_ids(self) -> set[int]:
+    """Player IDs of every intern, including removed ones: the interns input to scoring."""
+    rows = await self._conn.execute_fetchall("SELECT id FROM players WHERE intern = 1")
+    return {row["id"] for row in rows}
 
   async def rename_player(self, player_id: int, name: str) -> bool:
     """Returns False if no such player."""
@@ -307,6 +335,9 @@ BOUNTY_PER_WEEK = 1
 # Players who have never been sniped count as last sniped at the start of the game...
 GAME_START = datetime(2026, 9, 28, tzinfo=SNIPE_TIMEZONE)
 
+# ...or, for interns, who joined late, the start of their internship...
+INTERN_START = datetime(2026, 11, 9, tzinfo=SNIPE_TIMEZONE)
+
 # ...and their bounty is multiplied by this
 NEVER_SNIPED_MULTIPLIER = 2
 
@@ -320,16 +351,17 @@ GAME_MULTIPLIER = 1
 SNIPED_PENALTY = 2
 
 
-def calculate_bounty(last_sniped_at: datetime | None, at: datetime) -> int:
+def calculate_bounty(last_sniped_at: datetime | None, at: datetime, intern: bool = False) -> int:
   """A player's bounty at a given time. last_sniped_at is None if they've never been sniped."""
   if last_sniped_at is None:
-    return NEVER_SNIPED_MULTIPLIER * calculate_bounty(GAME_START, at)
-  # Never negative, e.g. for snipes recorded with a date before the game started
+    start = INTERN_START if intern else GAME_START
+    return NEVER_SNIPED_MULTIPLIER * calculate_bounty(start, at)
+  # Never negative, e.g. for snipes recorded with a date before the game (or internship) started
   weeks = max(0, (at - last_sniped_at) // timedelta(weeks=1))
   return BASE_BOUNTY + BOUNTY_PER_WEEK * weeks
 
 
-def calculate_player_bounty(snipes: Iterable[Snipe], player_id: int, at: datetime) -> int:
+def calculate_player_bounty(snipes: Iterable[Snipe], player_id: int, at: datetime, intern: bool) -> int:
   """A player's bounty at a given time (usually now). Snipes after that time are ignored."""
   last_sniped_at = max(
     (
@@ -340,15 +372,16 @@ def calculate_player_bounty(snipes: Iterable[Snipe], player_id: int, at: datetim
     ),
     default=None,
   )
-  return calculate_bounty(last_sniped_at, at)
+  return calculate_bounty(last_sniped_at, at, intern)
 
 
-def _replay(snipes: Iterable[Snipe]) -> Iterator[tuple[Snipe, int, int]]:
+def _replay(snipes: Iterable[Snipe], interns: Collection[int]) -> Iterator[tuple[Snipe, int, int]]:
   """Replays the snipe history in order, yielding (snipe, target_id, points)
   for each person sniped in each scored snipe.
 
   points is what sniping that person was worth to the sniper, from their bounty
-  at the time.
+  at the time. interns is the player IDs of every intern, including removed ones
+  (from SnipesDatabase.list_intern_ids).
   """
   last_sniped_at: dict[int, datetime] = {}
 
@@ -356,32 +389,32 @@ def _replay(snipes: Iterable[Snipe]) -> Iterator[tuple[Snipe, int, int]]:
     if snipe.status not in SCORED_STATUSES:
       continue
     for target_id in snipe.target_ids:
-      bounty = calculate_bounty(last_sniped_at.get(target_id), snipe.sniped_at)
+      bounty = calculate_bounty(last_sniped_at.get(target_id), snipe.sniped_at, target_id in interns)
       yield snipe, target_id, (bounty + SNIPE_BONUS) * GAME_MULTIPLIER
       last_sniped_at[target_id] = snipe.sniped_at
 
 
-def calculate_scores(snipes: Iterable[Snipe]) -> dict[int, int]:
+def calculate_scores(snipes: Iterable[Snipe], interns: Collection[int]) -> dict[int, int]:
   """Replays the snipe history in order and returns {player_id: score}.
 
   Players who haven't been in a scored snipe are left out, so look scores up
   with .get(player_id, 0).
   """
   scores: dict[int, int] = defaultdict(int)
-  for snipe, target_id, points in _replay(snipes):
+  for snipe, target_id, points in _replay(snipes, interns):
     scores[snipe.sniper_id] += points
     scores[target_id] -= SNIPED_PENALTY
   return dict(scores)
 
 
-def calculate_snipe_points(snipes: Iterable[Snipe], snipe_id: int) -> dict[int, int]:
+def calculate_snipe_points(snipes: Iterable[Snipe], interns: Collection[int], snipe_id: int) -> dict[int, int]:
   """What each person sniped in one snipe was worth to the sniper, as {target_id: points}.
 
   Empty if that snipe isn't in the history or doesn't count towards scores.
   """
   return {
     target_id: points
-    for snipe, target_id, points in _replay(snipes)
+    for snipe, target_id, points in _replay(snipes, interns)
     if snipe.id == snipe_id
   }
 
@@ -394,17 +427,17 @@ class PlayerStats:
   bounty: int
 
 
-def calculate_player_stats(snipes: Iterable[Snipe], player_id: int, at: datetime) -> PlayerStats:
+def calculate_player_stats(snipes: Iterable[Snipe], interns: Collection[int], player_id: int, at: datetime) -> PlayerStats:
   """A player's stats at a given time (usually now). Snipes after that time are ignored."""
   scored = [
     snipe for snipe in snipes
     if snipe.status in SCORED_STATUSES and snipe.sniped_at <= at
   ]
   return PlayerStats(
-    points=calculate_scores(scored).get(player_id, 0),
+    points=calculate_scores(scored, interns).get(player_id, 0),
     snipes=sum(1 for snipe in scored if snipe.sniper_id == player_id),
     times_sniped=sum(1 for snipe in scored if player_id in snipe.target_ids),
-    bounty=calculate_player_bounty(scored, player_id, at),
+    bounty=calculate_player_bounty(scored, player_id, at, player_id in interns),
   )
 
 
@@ -415,9 +448,9 @@ class LeaderboardEntry:
   points: int
 
 
-def calculate_leaderboard(snipes: Iterable[Snipe], players: Iterable[Player]) -> list[LeaderboardEntry]:
+def calculate_leaderboard(snipes: Iterable[Snipe], interns: Collection[int], players: Iterable[Player]) -> list[LeaderboardEntry]:
   """Ranks players by points, highest first. Tied players share a rank (1, 2, 2, 4)."""
-  scores = calculate_scores(snipes)
+  scores = calculate_scores(snipes, interns)
   ranked = sorted(players, key=lambda player: (-scores.get(player.id, 0), player.name.lower()))
 
   leaderboard: list[LeaderboardEntry] = []
@@ -435,5 +468,5 @@ def calculate_bounties(snipes: Iterable[Snipe], players: Iterable[Player], at: d
   Tied players are sorted by name.
   """
   snipes = list(snipes)  # read once per player
-  bounties = [(player, calculate_player_bounty(snipes, player.id, at)) for player in players]
+  bounties = [(player, calculate_player_bounty(snipes, player.id, at, player.intern)) for player in players]
   return sorted(bounties, key=lambda entry: (-entry[1], entry[0].name.lower()))

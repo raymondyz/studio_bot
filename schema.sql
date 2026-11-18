@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS players (
   discord_id  INTEGER NOT NULL UNIQUE,
   name        TEXT    NOT NULL,
   active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  intern      INTEGER NOT NULL DEFAULT 0 CHECK (intern IN (0, 1)),
   joined_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
